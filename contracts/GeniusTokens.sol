@@ -13,14 +13,15 @@ contract GeniusTokens is Ownable, ERC20 {
     // modify token decimal
     uint8 private constant DECIMALS = 18;
 
-    uint256 public constant INIT_SUPPLY = 5000000 * (10**uint256(DECIMALS)); // 5 million tokens
+    uint256 public constant INIT_SUPPLY = 7380000 * (10**uint256(DECIMALS)); // 7.38 million tokens
+    uint256 public constant ICO_SUPPLY = 36900000 * (10**uint256(DECIMALS));  // 36.9 million tokens
     uint256 public constant MAX_SUPPLY = 50000000 * (10**uint256(DECIMALS)); // 50 million tokens
 
     mapping (address => bool) _minters;
     mapping (address => bool) _burners;
 
     uint256 public soldTokens = 0;
-    uint256[] public limits = [12500, 12500, 12500, 12500];
+    uint256[] public limits = [12500 * 10 ** 18, 12500 * 10 ** 18, 12500 * 10 ** 18, 12500 * 10 ** 18];
     uint256[] public rates = [1000, 800, 640, 512];
 
     constructor () ERC20(NAME, SYMBOL) {
@@ -71,14 +72,63 @@ contract GeniusTokens is Ownable, ERC20 {
     }
 
     function defineStep() public view returns(uint256) {
-        uint256 step = 0;
-        for (uint256 i = 0; i < limits.length - 1; i++) {
-            if (limits[i] * rates[i] > soldTokens) {
+        uint256 step = 3;
+        uint256 sumStep = 0;
+        for (uint256 i = 0; i < limits.length; i++) {
+            sumStep += limits[i] * rates[i];
+            if (sumStep > soldTokens) {
                 step = i;
                 break;
             }
         }
         return step;
+    }
+
+    function calcTokenAmount(uint256 ethAmount) private view returns(uint256) {
+        uint256 step = defineStep();
+        uint256 tokenAmount = 0;
+        uint256 step0 = limits[0] * rates[0];  // 1000
+        uint256 step1 = limits[1] * rates[1];  // 800
+        uint256 step2 = limits[2] * rates[2];  // 640
+        if (step == 0) {
+            // first step
+            if ((soldTokens + ethAmount * rates[0]) <= step0) tokenAmount = ethAmount * rates[0];
+            else {
+                tokenAmount += step0 - soldTokens;
+                uint256 remainedETH = ethAmount - uint256(tokenAmount / rates[0]);
+                if (remainedETH <= limits[1]) {
+                    tokenAmount += remainedETH * rates[1];
+                } else if (remainedETH > limits[1] && remainedETH <= limits[1] + limits[2]) {
+                    tokenAmount += step1 + (remainedETH - limits[1]) * rates[2];
+                } else {
+                    tokenAmount += step1 + step2 + (remainedETH - limits[1] - limits[2]) * rates[3];
+                }
+            }
+        } else if (step  == 1) {
+            // second step
+            if ((soldTokens + ethAmount * rates[1] - step0) <= step1) tokenAmount = ethAmount * rates[1];
+            else {
+                tokenAmount = step0 + step1 - soldTokens;
+                uint256 remainedETH = ethAmount - uint256(tokenAmount / rates[1]);
+                if (remainedETH <= limits[2]) {
+                    tokenAmount += remainedETH * rates[2];
+                } else {
+                    tokenAmount += step2 + (remainedETH - limits[2]) * rates[3];
+                }
+            }
+        } else if (step  == 2) {
+            // third step
+            if ((soldTokens + ethAmount * rates[0] - step0 - step1) <= step2) tokenAmount = ethAmount * rates[2];
+            else {
+                tokenAmount = step0 + step1 + step2 - soldTokens;
+                uint256 remainedETH = ethAmount - uint256(tokenAmount / rates[2]);
+                tokenAmount += remainedETH * rates[3];
+            }
+        } else {
+            // the last step
+            tokenAmount = ethAmount * rates[3];  // 512
+        }
+        return tokenAmount;
     }
 
     /**
@@ -87,7 +137,7 @@ contract GeniusTokens is Ownable, ERC20 {
     rates = [1000, 800, 640, 512]
     */ 
     function dynamicConvTable(uint256[][] memory convTable) external onlyOwner {
-        require(convTable.length > 0, "Invalid data");
+        require(convTable.length == 4, "Invalid data");
         for (uint256 i = 0; i < convTable.length; i++) {
             require(convTable[i].length == 2 && convTable[i][0] > 0 && convTable[i][1] > 0, "Invalid data item");
         }
@@ -108,11 +158,12 @@ contract GeniusTokens is Ownable, ERC20 {
     receive () external payable {
         // Check gnus token before receive eth
         require(msg.value > 0, "You have sent 0 ether!");
-        uint256 step = defineStep();
-        uint256 tokenAmount = msg.value * rates[step];
+        uint256 tokenAmount = calcTokenAmount(msg.value);
         require(gnusBalance() >= tokenAmount, "You have sent too much eth amount");
+        require(soldTokens + tokenAmount <= ICO_SUPPLY, "ERC20Capped: cap exceeded");
+        _mint(address(msg.sender), tokenAmount);
         soldTokens += tokenAmount;
-        IERC20(address(this)).transfer(address(msg.sender), tokenAmount);
+        // IERC20(address(this)).transfer(address(msg.sender), tokenAmount);
     }
 
     // Withdraw GNUS tokens
